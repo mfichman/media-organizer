@@ -222,24 +222,6 @@ def main():
     read_files(args, pool, log)
     mark_duplicates()
     organize_files(args, pool, log)
-    #fix_files(args)
-
-def fix_files(args):
-    for media in Media.select().where(~Media.organized_at.is_null(), ~Media.duplicate):
-        path = parse_path(args, media.digest, media.stem, media.taken_at, media.extension)
-
-        if media.path != path:
-            parent = pathlib.Path(path).parent
-            parent.mkdir(parents=True, exist_ok=True)
-
-            source = pathlib.Path(media.path)
-            source.rename(path)
-
-            print('mv', source, path)
-
-            media.path = path
-            media.save()
-
 
 if __name__ == '__main__':
     try:
