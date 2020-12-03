@@ -44,4 +44,4 @@ def parse(path):
 
         return raw, {'taken_at': time}
     except PIL.UnidentifiedImageError:
-        return raw, {}
+        return {}, {}

@@ -1,3 +1,6 @@
 *.db
 *.swp
 *.bak
+*.pyc
+*.db-shm
+*.db-wal

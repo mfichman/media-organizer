@@ -12,46 +12,15 @@ import json
 import multiprocessing
 import os
 import pathlib
-import peewee
 import re
 import signal
 import sys
+import peewee
 
+import models
 import metadata
 
-db = peewee.SqliteDatabase('media.db', pragmas={'journal_mode': 'wal'})
-
-class File(peewee.Model):
-    class Meta:
-        database = db
-
-    path = peewee.CharField(index=True, unique=True)
-    stem = peewee.CharField(index=True)
-    extension = peewee.CharField(index=True)
-    inspected_at = peewee.DateTimeField(index=True, null=True)
-
-class Media(peewee.Model):
-    class Meta:
-        database = db
-        indexes = ((('extension', 'stem'), False),)
-
-    types = (
-        '.png', '.gif', '.jpg', '.jpeg', '.heic', '.jp2',
-        '.mpg', '.mp4', '.mov', '.mkv',
-    )
-
-    name = peewee.CharField()
-    stem = peewee.CharField()
-    extension = peewee.CharField()
-    path = peewee.CharField(index=True)
-    digest = peewee.CharField(index=True)
-    size = peewee.BigIntegerField()
-    metadata = peewee.CharField()
-    created_at = peewee.DateTimeField(default=datetime.datetime.now)
-    updated_at = peewee.DateTimeField(default=datetime.datetime.now)
-    taken_at = peewee.DateTimeField(index=True)
-    organized_at = peewee.DateTimeField(null=True)
-    source = peewee.CharField(unique=True)
+from models import Media, File
 
 def parse_digest(path):
     sha = hashlib.sha256()
@@ -67,6 +36,15 @@ def parse_digest(path):
 def parse_metadata(path):
     return metadata.parse(path)
 
+def parse_path(args, digest, stem, taken_at, suffix):
+    year = taken_at.strftime('%Y')
+    month = taken_at.strftime('%m')
+    day = taken_at.strftime('%d')
+    sec = taken_at.strftime('%H%M%S')
+    stem = '-'.join((sec, stem, digest[:16]))
+
+    return args.output.joinpath(year, month, day, stem).with_suffix(suffix)
+
 def parse_media(args, source):
     suffix = source.suffix.lower()
 
@@ -77,12 +55,7 @@ def parse_media(args, source):
     raw, metadata = parse_metadata(source)
     taken_at = metadata['taken_at']
 
-    year = taken_at.strftime('%Y')
-    month = taken_at.strftime('%m')
-    sec = taken_at.strftime('%H%M%S')
-    stem = '-'.join((sec, digest[:16]))
-
-    path = args.output.joinpath(year, month, stem).with_suffix(suffix)
+    path = parse_path(args, digest, source.stem, taken_at, suffix)
 
     stat = source.stat()
 
@@ -107,10 +80,13 @@ def save_media(params):
     query = Media.insert(params).on_conflict(conflict_target=[Media.source], update=params)
     query.execute()
 
-    query = File.update(inspected_at=datetime.datetime.now()).where(File.path == params['source'])
-    query.execute()
+    mark_processed(params['source'])
 
     return Media.select().where(Media.digest == params['digest']).execute()[0]
+
+def mark_processed(path):
+    query = File.update(inspected_at=datetime.datetime.now()).where(File.path == path)
+    query.execute()
 
 def input_iterator(args):
     for folder in args.input:
@@ -127,14 +103,19 @@ def log_write(log, message):
     log.write('\n')
     print(message)
 
-def find_files(args, db):
+def find_files(args):
     total = file_count_total(input_iterator(args))
 
     for index, path in enumerate(input_iterator(args)):
-        print('{} {}/{}'.format(path, index, total))
+        print('find {} {}/{}'.format(path, index, total))
         params = dict(path=path, extension=path.suffix, stem=path.stem)
-        query = File.insert(params).on_conflict(conflict_target=[File.path], update=params)
-        query.execute()
+        File.insert(params)\
+            .on_conflict(
+                preserve=[File.inspected_at],
+                conflict_target=[File.path],
+                update=params
+            )\
+            .execute()
 
 def file_count_total(paths):
     return sum(1 for _ in paths)
@@ -142,14 +123,12 @@ def file_count_total(paths):
 def file_size_total(paths):
     return sum(path.stat().st_size for path in paths)
 
-def read_files(args, pool, db):
+def read_files(args, pool, log):
     files = File.select().where(File.inspected_at.is_null()).execute()
     paths = [pathlib.Path(f.path) for f in files]
 
     count_total = file_count_total(paths)
     size_total = file_size_total(paths)
-
-    log = open('media.log', 'w')
 
     parse = functools.partial(parse_media, args)
 
@@ -165,11 +144,12 @@ def read_files(args, pool, db):
             log_write(log, '{}: {}'.format(message, path))
 
         if result is None:
+            mark_processed(path)
             continue
 
         save_media(result)
 
-        print('{} {} {}/{} {}/{}'.format(
+        print('read {} {} {}/{} {}/{}'.format(
             result['source'],
             result['path'],
             count_processed,
@@ -178,23 +158,39 @@ def read_files(args, pool, db):
             humanize.naturalsize(size_total)
         ))
 
-def organize_files(args, pool, db):
+def organize_files(args, pool, log):
     photos = Media.select()\
-        .where(Media.organized_at.is_null())\
-        .order_by(Media.taken_at.asc(), Media.id.asc())\
-        .group_by(Media.digest)\
-        .limit(10)
+        .where(Media.organized_at.is_null(), ~Media.duplicate)\
+        .order_by(Media.id.asc())
 
     for parent in set(pathlib.Path(photo.path).parent for photo in photos):
         parent.mkdir(parents=True, exist_ok=True)
 
     for photo in photos:
-        with db:
-            photo.organized_at = datetime.datetime.now()
-            photo.save()
-            source = pathlib.Path(photo.source)
+        photo.organized_at = datetime.datetime.now()
+        photo.save()
+        source = pathlib.Path(photo.source)
+        try:
             source.rename(photo.path)
-            print('mv', photo.source, photo.path)
+        except FileNotFoundError as e:
+            log_write(log, str(e))
+        print('mv', photo.source, photo.path)
+
+def mark_duplicates():
+    gold = Media.select(
+        peewee.fn.first_value(Media.id).over(
+            partition_by=Media.digest,
+            order_by=[
+                Media.organized_at.asc(nulls='LAST'),
+                peewee.fn.length(Media.stem).asc(),
+                Media.taken_at.asc()
+            ]
+        ).distinct()
+    )
+
+    with Media.db:
+        Media.update(duplicate=False).execute()
+        Media.update(duplicate=True).where(Media.id.not_in(gold)).execute()
 
 def main():
     parser = argparse.ArgumentParser(description='organize photos')
@@ -202,27 +198,48 @@ def main():
     parser.add_argument('--output', '-o', default=r'E:\Photos', type=pathlib.Path)
     args = parser.parse_args()
 
-    db.connect()
-    db.create_tables([Media, File])
+    models.db.connect()
+    models.db.create_tables([Media, File])
 
     args.input = args.input or (
         r'E:\JilliPhotos',
         r'E:\iCloud Photos',
-        r'E:\Google Photos (Newly Added Photos)',
-        r'E:\Google Drive\Photos\Natalie',
-        r'E:\Google Drive\Videos\Family Videos',
-        r'E:\Google Drive\Videos\Year',
+        #r'E:\Google Photos (Newly Added Photos)',
+        #r'E:\Google Drive\Photos\Natalie',
+        #r'E:\Google Drive\Videos\Family Videos',
+        #r'E:\Google Drive\Videos\Year',
     )
+
     #import logging
     #logger = logging.getLogger('peewee')
     #logger.addHandler(logging.StreamHandler())
     #logger.setLevel(logging.DEBUG)
 
     pool = multiprocessing.Pool(2, init_worker)
+    log = open('media.log', 'w')
 
-    #find_files(args, db)
-    read_files(args, pool, db)
-    #organize_files(args, pool, db)
+    find_files(args)
+    read_files(args, pool, log)
+    mark_duplicates()
+    organize_files(args, pool, log)
+    #fix_files(args)
+
+def fix_files(args):
+    for media in Media.select().where(~Media.organized_at.is_null(), ~Media.duplicate):
+        path = parse_path(args, media.digest, media.stem, media.taken_at, media.extension)
+
+        if media.path != path:
+            parent = pathlib.Path(path).parent
+            parent.mkdir(parents=True, exist_ok=True)
+
+            source = pathlib.Path(media.path)
+            source.rename(path)
+
+            print('mv', source, path)
+
+            media.path = path
+            media.save()
+
 
 if __name__ == '__main__':
     try:

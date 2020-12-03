@@ -13,8 +13,13 @@ import hachoir.core
 import datetime
 
 def parse_timestamp(metadata):
+    epoch = '1904-01-01 00:00:00'
+
     try:
-        return datetime.datetime.strptime(metadata['Creation date'], '%Y-%m-%d %H:%M:%S')
+        if metadata['Creation date'] == epoch:
+            return None
+        else:
+            return datetime.datetime.strptime(metadata['Creation date'], '%Y-%m-%d %H:%M:%S')
     except KeyError:
         return None
 
@@ -28,7 +33,6 @@ def parse(path):
         time = parse_timestamp(raw)
 
         raw = {'hachoir': raw}
-
         return raw, {'taken_at': time}
-    except:
+    except ValueError:
         return {}, {}

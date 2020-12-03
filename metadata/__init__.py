@@ -23,13 +23,14 @@ parsers = {
     '.gif': [stat, path],
     '.mov': [stat, path, hachoir],
     '.mp4': [stat, path, hachoir],
+    '.mkv': [stat, path, hachoir],
+    '.aae': [stat, path]
 }
 
 def remove_nulls(metadata):
     return {k: v for k, v in metadata.items() if v is not None}
 
 def parse(path):
-    #print(path)
     merged_metadata = {}
     merged_raw = {}
 
@@ -38,9 +39,5 @@ def parse(path):
 
         merged_metadata.update(remove_nulls(metadata))
         merged_raw.update(remove_nulls(raw))
-
-    #print(merged_metadata)
-    #print(path)
-    #raise
 
     return merged_raw, merged_metadata

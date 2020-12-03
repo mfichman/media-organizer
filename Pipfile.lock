@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "27d61aa47c27f345a5808165fa510b23378ec599ef9046c608f403d784a3d9e0"
+            "sha256": "104b1b0e287ce6a5d0237eda0485dbcf9488b005bb2d432541f266633bd8b369"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -30,6 +30,13 @@
             ],
             "markers": "sys_platform == 'win32'",
             "version": "==0.4.4"
+        },
+        "enzyme": {
+            "hashes": [
+                "sha256:f2167fa97c24d1103a94d4bf4eb20f00ca76c38a37499821049253b2059c62bb"
+            ],
+            "index": "pypi",
+            "version": "==0.4.1"
         },
         "exif": {
             "hashes": [

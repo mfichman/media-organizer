@@ -9,6 +9,7 @@
 
 import exifread
 import datetime
+import base64
 
 def parse_timestamp(metadata, date, subsec):
     try:
@@ -19,11 +20,16 @@ def parse_timestamp(metadata, date, subsec):
 
 def parse(path):
     with open(path, 'rb') as fd:
-        raw = {key: str(value) for key, value in exifread.process_file(fd).items()}
+        raw = {}
+        for key, value in exifread.process_file(fd).items():
+            if type(value) == bytes:
+                raw[key] = base64.b64encode(value).decode('utf-8')
+            else:
+                raw[key] = str(value)
 
         time = (
-            parse_timestamp(raw, 'DateTimeOriginal', 'SubSecTimeOriginal') or
-            parse_timestamp(raw, 'DateTime', 'SubSecTime')
+            parse_timestamp(raw, 'EXIF DateTimeOriginal', 'EXIF SubSecTimeOriginal') or
+            parse_timestamp(raw, 'EXIF DateTime', 'EXIF SubSecTime')
         )
 
         raw = {'exifread': raw}

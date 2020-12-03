@@ -15,7 +15,7 @@ exifread = "*"
 humanize = "*"
 pillow = "*"
 pylint = "*"
-pil = "*"
+enzyme = "*"
 
 [requires]
 python_version = "3.7"
